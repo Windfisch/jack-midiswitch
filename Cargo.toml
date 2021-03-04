@@ -9,3 +9,4 @@ license = "BSD-2-Clause"
 jack = { git = "https://github.com/Windfisch/rust-jack" }
 ringbuf = "0.2.1"
 clap = "2"
+termion = "1.5"

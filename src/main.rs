@@ -1,10 +1,10 @@
 use jack;
 use clap;
-
-/*struct Notifications;
-impl jack::NotificationHandler for Notifications {
-
-}*/
+use termion;
+use termion::raw::IntoRawMode;
+use termion::event::Key;
+use termion::input::TermRead;
+use std::io::{Write, stdin, stdout};
 
 fn main() {
 	let args = clap::App::new("jack-midiswitch")
@@ -58,6 +58,10 @@ fn main() {
 		)
 	}).collect();
 
+	let mut selections: Vec<_> = split_mappings.iter().chain(merge_mappings.iter()).map(|mapping| {
+		(mapping, 0 as usize)
+	}).collect();
+
 	let async_client = client.activate_async((), jack::ClosureProcessHandler::new(move |client: &jack::Client, scope: &jack::ProcessScope| -> jack::Control {
 		
 		// copy events from activated in->out port connections
@@ -76,7 +80,39 @@ fn main() {
 		return jack::Control::Continue;
 	})).expect("Failed to activate client");
 
-	std::thread::sleep(std::time::Duration::from_secs(10));
+	let stdin = stdin();
+	let mut stdout = stdout().into_raw_mode().expect("Failed to enable terminal raw mode");
 
-    println!("Hello, world!");
+	write!(stdout, "ctrl-c to exit.\r\n").unwrap();
+	stdout.flush().unwrap();
+
+	for input in stdin.keys() {
+		// update the selection
+		match input.unwrap() {
+			Key::Ctrl('c') => { break; }
+			Key::Char(chr) => {
+				for (mapping, index) in selections.iter_mut() {
+					if let Some(pos) = mapping.find(chr) {
+						*index = pos;
+					}
+				}
+			}
+			_ => {}
+		}
+
+		// display the current selection
+		write!(stdout, "{}\r", termion::clear::CurrentLine).unwrap();
+		for (mapping, index) in selections.iter() {
+			for (i, chr) in mapping.chars().enumerate() {
+				if i == *index {
+					write!(stdout, "[{}] ", chr).unwrap();
+				}
+				else {
+					write!(stdout, " {}  ", chr).unwrap();
+				}
+			}
+			write!(stdout, " |  ").unwrap();
+		}
+		stdout.flush().unwrap();
+	}
 }
