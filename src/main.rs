@@ -62,7 +62,7 @@ fn main() {
 		(mapping, 0 as usize)
 	}).collect();
 
-	let async_client = client.activate_async((), jack::ClosureProcessHandler::new(move |client: &jack::Client, scope: &jack::ProcessScope| -> jack::Control {
+	let _async_client = client.activate_async((), jack::ClosureProcessHandler::new(move |_client: &jack::Client, scope: &jack::ProcessScope| -> jack::Control {
 		
 		// copy events from activated in->out port connections
 		for (out_idx, in_port, out_ports) in split_ports.iter_mut() {
