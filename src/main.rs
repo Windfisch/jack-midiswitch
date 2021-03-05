@@ -1,10 +1,16 @@
 use jack;
 use clap;
 use termion;
+use ringbuf;
 use termion::raw::IntoRawMode;
 use termion::event::Key;
 use termion::input::TermRead;
 use std::io::{Write, stdin, stdout};
+
+enum Message {
+	Merge(usize, usize),
+	Split(usize, usize)
+}
 
 fn main() {
 	let args = clap::App::new("jack-midiswitch")
@@ -62,8 +68,23 @@ fn main() {
 		(mapping, 0 as usize)
 	}).collect();
 
+	let (mut producer, mut consumer) = ringbuf::RingBuffer::<Message>::new(10).split();
+
 	let _async_client = client.activate_async((), jack::ClosureProcessHandler::new(move |_client: &jack::Client, scope: &jack::ProcessScope| -> jack::Control {
-		
+		// apply updates from the ringbuffer
+		while let Some(message) = consumer.pop() {
+			match message {
+				Message::Merge(index, port) => {
+					assert!(port < merge_ports[index].2.len());
+					merge_ports[index].0 = port;
+				}
+				Message::Split(index, port) => {
+					assert!(port < split_ports[index].2.len());
+					split_ports[index].0 = port;
+				}
+			}
+		}
+
 		// copy events from activated in->out port connections
 		for (out_idx, in_port, out_ports) in split_ports.iter_mut() {
 			let mut writer = out_ports[*out_idx].writer(scope);
@@ -77,6 +98,7 @@ fn main() {
 				writer.write(&event).ok();
 			}
 		}
+
 		return jack::Control::Continue;
 	})).expect("Failed to activate client");
 
@@ -91,9 +113,16 @@ fn main() {
 		match input.unwrap() {
 			Key::Ctrl('c') => { break; }
 			Key::Char(chr) => {
-				for (mapping, index) in selections.iter_mut() {
+				for (index, (mapping, selected)) in selections.iter_mut().enumerate() {
 					if let Some(pos) = mapping.find(chr) {
-						*index = pos;
+						*selected = pos;
+
+						if index < split_mappings.len() {
+							producer.push(Message::Split(index, pos)).map_err(|_|()).expect("Failed to push to the queue");
+						}
+						else {
+							producer.push(Message::Merge(index - split_mappings.len(), pos)).map_err(|_|()).expect("Failed to push to the queue");
+						}
 					}
 				}
 			}
@@ -115,4 +144,6 @@ fn main() {
 		}
 		stdout.flush().unwrap();
 	}
+
+	print!("\r\n");
 }
