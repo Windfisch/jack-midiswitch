@@ -60,7 +60,8 @@ fn main() {
 			client.register_port(&format!("{}_out", mapping), jack::MidiOut).expect(&format!("Failed to register output port {}_out", mapping)),
 			mapping.chars().map(|character| {
 				client.register_port(&format!("{}_in_{}", mapping, character), jack::MidiIn).expect(&format!("Failed to register input port {}_in_{}", mapping, character))
-			}).collect::<Vec<_>>()
+			}).collect::<Vec<_>>(),
+			false
 		)
 	}).collect();
 
@@ -71,14 +72,24 @@ fn main() {
 	let (mut producer, mut consumer) = ringbuf::RingBuffer::<Message>::new(10).split();
 
 	let _async_client = client.activate_async((), jack::ClosureProcessHandler::new(move |_client: &jack::Client, scope: &jack::ProcessScope| -> jack::Control {
+		// hack to clear all midi buffers
+		for (_,_,out_ports) in split_ports.iter_mut() {
+			for out_port in out_ports.iter_mut() {
+				out_port.writer(scope);
+			}
+		}
+
 		// apply updates from the ringbuffer
 		while let Some(message) = consumer.pop() {
 			match message {
 				Message::Merge(index, port) => {
 					assert!(port < merge_ports[index].2.len());
 					merge_ports[index].0 = port;
+					merge_ports[index].3 = true;
 				}
 				Message::Split(index, port) => {
+					let old_index = split_ports[index].0;
+					all_notes_off(&mut split_ports[index].2[old_index].writer(scope));
 					assert!(port < split_ports[index].2.len());
 					split_ports[index].0 = port;
 				}
@@ -92,8 +103,14 @@ fn main() {
 				writer.write(&event).ok();
 			}
 		}
-		for (in_idx, out_port, in_ports) in merge_ports.iter_mut() {
+		for (in_idx, out_port, in_ports, all_notes_off_pending) in merge_ports.iter_mut() {
 			let mut writer = out_port.writer(scope);
+
+			if *all_notes_off_pending {
+				all_notes_off(&mut writer);
+				*all_notes_off_pending = false;
+			}
+
 			for event in in_ports[*in_idx].iter(scope) {
 				writer.write(&event).ok();
 			}
