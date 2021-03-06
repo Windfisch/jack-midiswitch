@@ -7,9 +7,23 @@ use termion::event::Key;
 use termion::input::TermRead;
 use std::io::{Write, stdin, stdout};
 
+#[derive(Debug)]
 enum Message {
 	Merge(usize, usize),
 	Split(usize, usize)
+}
+
+struct Split {
+	selected: usize,
+	in_port: jack::Port<jack::MidiIn>,
+	out_ports: Vec<jack::Port<jack::MidiOut>>
+}
+
+struct Merge {
+	selected: usize,
+	out_port: jack::Port<jack::MidiOut>,
+	in_ports: Vec<jack::Port<jack::MidiIn>>,
+	all_notes_off_pending: bool
 }
 
 fn main() {
@@ -45,24 +59,24 @@ fn main() {
 	let client = jack::Client::new(&client_name, jack::ClientOptions::NO_START_SERVER).expect("Failed to connect to JACK").0;
 	
 	let mut split_ports: Vec<_> = split_mappings.iter().map(|mapping| {
-		(
-			0 as usize,
-			client.register_port(&format!("{}_in", mapping), jack::MidiIn).expect(&format!("Failed to register input port {}_in", mapping)),
-			mapping.chars().map(|character| {
+		Split {
+			selected: 0,
+			in_port: client.register_port(&format!("{}_in", mapping), jack::MidiIn).expect(&format!("Failed to register input port {}_in", mapping)),
+			out_ports: mapping.chars().map(|character| {
 				client.register_port(&format!("{}_out_{}", mapping, character), jack::MidiOut).expect(&format!("Failed to register output port {}_out_{}", mapping, character))
-			}).collect::<Vec<_>>()
-		)
+			}).collect()
+		}
 	}).collect();
 
 	let mut merge_ports: Vec<_> = merge_mappings.iter().map(|mapping| {
-		(
-			0 as usize,
-			client.register_port(&format!("{}_out", mapping), jack::MidiOut).expect(&format!("Failed to register output port {}_out", mapping)),
-			mapping.chars().map(|character| {
+		Merge {
+			selected: 0,
+			out_port: client.register_port(&format!("{}_out", mapping), jack::MidiOut).expect(&format!("Failed to register output port {}_out", mapping)),
+			in_ports: mapping.chars().map(|character| {
 				client.register_port(&format!("{}_in_{}", mapping, character), jack::MidiIn).expect(&format!("Failed to register input port {}_in_{}", mapping, character))
-			}).collect::<Vec<_>>(),
-			false
-		)
+			}).collect(),
+			all_notes_off_pending: false
+		}
 	}).collect();
 
 	let mut selections: Vec<_> = split_mappings.iter().chain(merge_mappings.iter()).map(|mapping| {
@@ -73,8 +87,8 @@ fn main() {
 
 	let _async_client = client.activate_async((), jack::ClosureProcessHandler::new(move |_client: &jack::Client, scope: &jack::ProcessScope| -> jack::Control {
 		// hack to clear all midi buffers
-		for (_,_,out_ports) in split_ports.iter_mut() {
-			for out_port in out_ports.iter_mut() {
+		for entry in split_ports.iter_mut() {
+			for out_port in entry.out_ports.iter_mut() {
 				out_port.writer(scope);
 			}
 		}
@@ -83,35 +97,35 @@ fn main() {
 		while let Some(message) = consumer.pop() {
 			match message {
 				Message::Merge(index, port) => {
-					assert!(port < merge_ports[index].2.len());
-					merge_ports[index].0 = port;
-					merge_ports[index].3 = true;
+					assert!(port < merge_ports[index].in_ports.len());
+					merge_ports[index].selected = port;
+					merge_ports[index].all_notes_off_pending = true;
 				}
 				Message::Split(index, port) => {
-					let old_index = split_ports[index].0;
-					all_notes_off(&mut split_ports[index].2[old_index].writer(scope));
-					assert!(port < split_ports[index].2.len());
-					split_ports[index].0 = port;
+					let old_index = split_ports[index].selected;
+					all_notes_off(&mut split_ports[index].out_ports[old_index].writer(scope));
+					assert!(port < split_ports[index].out_ports.len());
+					split_ports[index].selected = port;
 				}
 			}
 		}
 
 		// copy events from activated in->out port connections
-		for (out_idx, in_port, out_ports) in split_ports.iter_mut() {
-			let mut writer = out_ports[*out_idx].writer(scope);
-			for event in in_port.iter(scope) {
+		for entry in split_ports.iter_mut() {
+			let mut writer = entry.out_ports[entry.selected].writer(scope);
+			for event in entry.in_port.iter(scope) {
 				writer.write(&event).ok();
 			}
 		}
-		for (in_idx, out_port, in_ports, all_notes_off_pending) in merge_ports.iter_mut() {
-			let mut writer = out_port.writer(scope);
+		for entry in merge_ports.iter_mut() {
+			let mut writer = entry.out_port.writer(scope);
 
-			if *all_notes_off_pending {
+			if entry.all_notes_off_pending {
 				all_notes_off(&mut writer);
-				*all_notes_off_pending = false;
+				entry.all_notes_off_pending = false;
 			}
 
-			for event in in_ports[*in_idx].iter(scope) {
+			for event in entry.in_ports[entry.selected].iter(scope) {
 				writer.write(&event).ok();
 			}
 		}
