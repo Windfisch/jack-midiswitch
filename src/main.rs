@@ -122,8 +122,10 @@ fn main() {
 	let stdin = stdin();
 	let mut stdout = stdout().into_raw_mode().expect("Failed to enable terminal raw mode");
 
-	write!(stdout, "ctrl-c to exit.\r\n").unwrap();
+	print!("ctrl-c to exit.\r\n");
 	stdout.flush().unwrap();
+	
+	display(&selections);
 
 	for input in stdin.keys() {
 		// update the selection
@@ -146,21 +148,34 @@ fn main() {
 			_ => {}
 		}
 
-		// display the current selection
-		write!(stdout, "{}\r", termion::clear::CurrentLine).unwrap();
-		for (mapping, index) in selections.iter() {
-			for (i, chr) in mapping.chars().enumerate() {
-				if i == *index {
-					write!(stdout, "[{}] ", chr).unwrap();
-				}
-				else {
-					write!(stdout, " {}  ", chr).unwrap();
-				}
-			}
-			write!(stdout, " |  ").unwrap();
-		}
-		stdout.flush().unwrap();
+		display(&selections);
 	}
 
 	print!("\r\n");
+}
+
+fn all_notes_off(writer: &mut jack::MidiWriter)
+{
+	for channel in 0..16 {
+		writer.write(&jack::RawMidi {
+			time: 0,
+			bytes: &[0xB0 | channel as u8, 11, 42]
+		}).ok();
+	}
+}
+
+fn display(selections: &Vec<(&String, usize)>) {
+	print!("{}\r", termion::clear::CurrentLine);
+	for (mapping, index) in selections.iter() {
+		for (i, chr) in mapping.chars().enumerate() {
+			if i == *index {
+				print!("[{}] ", chr);
+			}
+			else {
+				print!(" {}  ", chr);
+			}
+		}
+		print!(" |  ");
+	}
+	stdout().flush().unwrap();
 }
