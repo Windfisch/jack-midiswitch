@@ -173,7 +173,7 @@ fn all_notes_off(writer: &mut jack::MidiWriter)
 	for channel in 0..16 {
 		writer.write(&jack::RawMidi {
 			time: 0,
-			bytes: &[0xB0 | channel as u8, 11, 42]
+			bytes: &[0xB0 | channel as u8, 123, 0]
 		}).ok();
 	}
 }
